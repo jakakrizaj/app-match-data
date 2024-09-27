@@ -3,6 +3,7 @@
 # jakakrizaj2k@gmail.com
 # I used chatgpt to set the layout of the app (tabs and basic plot layouts)
 # The data management - rotation and matching algorithm, I wrote myself
+# 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
@@ -39,8 +40,9 @@ class MatchingApp:
         self.modified_data2 = None
         self.matched_id = None
         self.dict_matches = None
-        self.final_df = None
+        self.df_final_matched = None
         self.missing_ref_trees = 0
+        self.missing_ref_tree_code = "999"
         
         self.tab_control = ttk.Notebook(self.root)
         
@@ -249,7 +251,7 @@ class MatchingApp:
         if self.dict_matches is not None:
             matched_id = {}
             visual_matches = []
-            missing_ref_tree_code = "999"
+            
             for key, list_dicts in self.dict_matches.items():
                 # Get reference tree data
                 ref_tree_data = self.data1.loc[self.data1["id"] == key].reset_index()
@@ -262,7 +264,7 @@ class MatchingApp:
                 
                 # If there aren't any more candidate trees left, assign a matched id of 0.
                 if len(list_dicts) == 0:
-                    matched_id[key] = missing_ref_tree_code
+                    matched_id[key] = self.missing_ref_tree_code
                     self.missing_ref_trees += 1
                 else:
                     closest = list_dicts[0]
@@ -294,18 +296,18 @@ class MatchingApp:
                         # Add popup and save the result,
                         user_input = tk.simpledialog.askinteger(title="Izbira drevesa", prompt="Katero število pripada zeleni piki? Če ni kandidata, vnesi 0")
                         if user_input == 0:
-                            matched_id[key] = missing_ref_tree_code
+                            matched_id[key] = self.missing_ref_tree_code
                             self.missing_ref_trees += 1
                         else:
                             selected_minidict = list_dicts[user_input-1]
                             matched_id[key] = selected_minidict["tree"].id
-
+                            visual_match = self.ax2.plot((ref_tree.x, selected_minidict["tree"].x), (ref_tree.y, selected_minidict["tree"].y), linewidth=1.5, c="black")
+                            visual_matches.append(visual_match)
                         # Reset plot to previous state and add the connection
                         added_tree.remove()
                         for text in texts:
                             text.remove()
-                        visual_match = self.ax2.plot((ref_tree.x, selected_minidict["tree"].x), (ref_tree.y, selected_minidict["tree"].y), linewidth=1.5, c="black")
-                        visual_matches.append(visual_match)
+
                         self.canvas2.draw()
             
             self.matched_id = matched_id
@@ -318,15 +320,19 @@ class MatchingApp:
         self.output_text = tk.Text(self.tab_z, height=20, width=80)
         self.output_text.pack(pady=10)
 
-        output_button = ttk.Button(self.tab_z, text="Prikaži transformacijo lidar podatkov:", command=self.show_changes)
+        output_button = ttk.Button(self.tab_z, text="Prikaži transformacijo lidar podatkov", command=self.show_changes)
         output_button.pack(pady=10)
         # Button that creates the df: (could be same as one button below?)
+        create_df_button = ttk.Button(self.tab_z, text="Ustvari datoteko usklajenih podatkov", command=self.match_dataframes)
+        create_df_button.pack(pady=5)
 
         # Button that displays the df:
 
         # Button that saves the df:
-
-        # Optionally I could also maybe add a button that does the rigid transform to find best fit of reference and lidar data? And that this would then be included in the report
+        save_df_button = ttk.Button(self.tab_z, text="Shrani usklajene podatke", command=self.save_matched_data)
+        save_df_button.pack(pady=5)
+        # Optionally I could also maybe add a button that does the rigid transform to find best fit of reference and lidar data? 
+        # And that this would then be included in the report as a sort of positioning error measurement - good idea
 
     def show_changes(self):
         if self.modified_data2 is not None:
@@ -340,42 +346,57 @@ class MatchingApp:
             transformation_matrix = f"{cos} {-sin} {0:.4f} {x_shift_global:.4f}\n"
             transformation_matrix += f"{sin} {cos} {0:.4f} {y_shift_global:.4f}\n{0:.4f} {0:.4f} {1:.4f} {0:.4f}\n{0:.4f} {0:.4f} {0:.4f} {1:.4f}"
             self.output_text.delete("1.0", tk.END)
-            self.output_text.insert(tk.END, f"\nCelotna sprememba upošteva predhodno spremembo, ki jo program samodejno\n naredi za prikaz podatkov v istem prostoru.\n")
+            self.output_text.insert(tk.END, f"\nCelotna sprememba upošteva predhodno spremembo, ki jo program samodejno\nnaredi za prikaz podatkov v istem prostoru.\n")
             self.output_text.insert(tk.END, f"Sprememba X: {x_shift}, celotna sprememba X: {x_shift_global:.3f}\n")
             self.output_text.insert(tk.END, f"Sprememba Y: {y_shift}, celotna sprememba Y: {y_shift_global:.3f}\n\n")
             self.output_text.insert(tk.END, f"Transformacijska matrika: \n{transformation_matrix}\n\n")
-            self.output_text.insert(tk.END, f"Opomba: prikazani so podatki za prevod lidar podatkov v terenske,\nza prevod terenskih v koordinatni sistem lidarja\nbi bila potrebna obratna transformacija.")
+            self.output_text.insert(tk.END, f"Opomba: prikazani so podatki za prevod lidar podatkov v terenske, za prevod\nterenskih v koordinatni sistem lidarja bi bila potrebna obratna transformacija.")
         else:
             messagebox.showerror("Napaka", "Nobenih modifikacij ni za pokazati.")
 
     def match_dataframes(self):
-        """Creates a final dataframe that has matched data from both datasets."""
-        ref_tree_order = self.matched_id.keys()
-        las_tree_order = self.matched_id.values()
+        """
+        Creates a final dataframe that has matched data from both datasets.
+        Also output the commission and ommission errors, when computing commission
+        errors there is (for now) an assumption that all lidar trees are inside the plot bounds
+        """
+        ref_tree_matches = []
+        las_tree_matches = []
+        for ref_id, las_id in self.matched_id.items():
+            if las_id != self.missing_ref_tree_code:
+                ref_tree_matches.append(ref_id)
+                las_tree_matches.append(las_id)
 
-        order_ref_dict = {val: index for index, val in enumerate(ref_tree_order)}
-        order_las_dict = {val: index for index, val in enumerate(las_tree_order)}
+
+        order_ref_dict = {val: index for index, val in enumerate(ref_tree_matches)}
+        order_las_dict = {val: index for index, val in enumerate(las_tree_matches)}
 
         df_ordered_data1 = self.data1.copy()
+        #df_missed_ref_trees = df_ordered_data1.loc[df_ordered_data1[]] # Sort from values of the las_tree_order
         df_ordered_data2 = self.data2.copy()
         # For data2 you should also first remove the ids that don't have a match! and add them to the commission error? What if the tree is outside of the plot bounds?        
         df_ordered_data1["sort_order"] = df_ordered_data1["id"].map(order_ref_dict)
         df_ordered_data2["sort_order"] = df_ordered_data2["id"].map(order_las_dict)
 
-        df_ordered_data1 = df_ordered_data1.sort_values(by="sort_order")
-        df_ordered_data2 = df_ordered_data2.sort_values(by="sort_order")
+        # Create subsets of dataframes to 
+        df_ordered_data1 = df_ordered_data1.sort_values(by="sort_order").reset_index()
+        df_matched_ref_trees = df_ordered_data1.dropna(subset=["sort_order"]).reset_index()
+        df_ommission = df_ordered_data1[df_ordered_data1["sort_order"].isnull()].reset_index()
+        df_ordered_data2 = df_ordered_data2.sort_values(by="sort_order").reset_index()
+        df_matched_las_trees = df_ordered_data2.dropna(subset=["sort_order"]).reset_index()
+        df_commission = df_ordered_data2[df_ordered_data2["sort_order"].isnull()].reset_index()
 
-        ref_x = df_ordered_data1["x"]
-        ref_y = df_ordered_data1["y"]
-        ref_dbh = df_ordered_data1["dbh"]
-        ref_id = df_ordered_data1["id"]
+        ref_x = df_matched_ref_trees["x"]
+        ref_y = df_matched_ref_trees["y"]
+        ref_dbh = df_matched_ref_trees["dbh"]
+        ref_id = df_matched_ref_trees["id"]
 
-        las_x = df_ordered_data2["x"]
-        las_y = df_ordered_data2["y"]
-        las_dbh = df_ordered_data2["dbh"]
-        las_id = df_ordered_data2["id"]
+        las_x = df_matched_las_trees["x"]
+        las_y = df_matched_las_trees["y"]
+        las_dbh = df_matched_las_trees["dbh"]
+        las_id = df_matched_las_trees["id"]
 
-        final_df = pd.DataFrame({"ID_ref" : ref_id,
+        df_final_matched = pd.DataFrame({"ID_ref" : ref_id,
                                  "ID_match" : las_id,
                                  "DBH_ref" : ref_dbh,
                                  "DBH_las" : las_dbh,
@@ -384,7 +405,21 @@ class MatchingApp:
                                  "X_match" : las_x,
                                  "Y_match" : las_y})
         
-        self.final_df = final_df
+        self.df_final_matched = df_final_matched
+        messagebox.showinfo("Uspeh", "Datoteka je ustvarjena!")
+        print(df_final_matched)
+        return df_final_matched # Come back once you figure out what you want to do with the commission and ommission data!
+
+    def save_matched_data(self):
+        """Saves the data in the set directory with the given name"""
+        if self.df_final_matched is not None:
+            file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV Files", "*.csv")])
+            if file_path:
+                self.df_final_matched.to_csv(file_path, sep=",", index=False)
+        else:
+            messagebox.showerror("Napaka", "Usklajena datoteka še ni ustvarjena.")
+            pass
+
 
 # Running the application
 if __name__ == "__main__":
