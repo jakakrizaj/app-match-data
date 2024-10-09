@@ -115,14 +115,18 @@ class MatchingApp:
             self.data1 = pd.read_csv(self.file1_path.get())
             if "X" in self.data1.columns:
                 self.data1 = self.data1.rename(columns={"X" : "x", "Y" : "y", "DBH" : "dbh", "ID" : "id"})
-            elif not pd.Series(["X", "x"]).isin(self.data1.columns).all():
+            elif "x" in self.data1.columns:
+                pass
+            else:
                 raise IndexError(f"Ne najdem podatkov o koordinatah za referenčne podatke!")
             
             self.data2 = pd.read_csv(self.file2_path.get())
             if "X" in self.data2.columns:
                 self.data2 = self.data2.rename(columns={"X" : "x", "Y" : "y", "DBH" : "dbh", "ID" : "id"})
-            elif not pd.Series(["X", "x"]).isin(self.data2.columns).all():
-                raise IndexError("Ne najdem podatkov o koordinatah za transformacijske podatke!")
+            elif "x" in self.data2.columns:
+                pass
+            else:
+                raise IndexError(f"Ne najdem podatkov o koordinatah za referenčne podatke!")
             
             self.initial_transform = self.initial_transform_values(self.data1, self.data2)
             self.data2["x"] -= self.initial_transform[0]
@@ -201,7 +205,7 @@ class MatchingApp:
         dbh_weight_entry.pack(pady=5)
         dbh_weight_entry.insert(0, "0.5")     # Default value for dbh weights
         create_dict_button = ttk.Button(self.tab3, text="Ustvari zbirko povezav", 
-            command=lambda: self.create_matching_dict(self.data1, self.modified_data2, float(dbh_weight_entry.get())))
+            command=lambda: self.create_matching_dict(df_ref=self.data1, df_las=self.modified_data2, dbh_weight=float(dbh_weight_entry.get())))
         create_dict_button.pack(pady=5)
 
         confidence_label = tk.Label(self.tab3, text="Določi samozavest pri povezovanju (0 - vse avtomatsko, 100 - vse ročno), priporočam 1 - 4")
@@ -219,6 +223,7 @@ class MatchingApp:
         are a list of dictionaries where each dictionary contains the id
         of the las tree and its' distance to the reference tree.
         """
+        df_las = df_las.reset_index()
         dict_matches = {}
         for index1, row1 in df_ref.iterrows():
             ref_tree = Tree(row1["id"], row1["x"], row1["y"], row1["dbh"])
@@ -229,8 +234,8 @@ class MatchingApp:
                 minidict = {"tree" : las_tree, "dist" : distance_to_las}
                 mylist.append(minidict)
 
-            # Sort the list of dicts by distances, 10 closest trees
-            newlist = sorted(mylist, key=lambda d: d["dist"])[:10]
+            # Sort the list of dicts by distances
+            newlist = sorted(mylist, key=lambda d: d["dist"])
 
             dict_matches[ref_tree.id] = newlist
 
@@ -252,13 +257,14 @@ class MatchingApp:
             matched_id = {}
             visual_matches = []
             
-            for key, list_dicts in self.dict_matches.items():
+            for key, list_dicts_main in self.dict_matches.items():
                 # Get reference tree data
                 ref_tree_data = self.data1.loc[self.data1["id"] == key].reset_index()
                 ref_tree = Tree(id=key, x=ref_tree_data.at[0, "x"], y=ref_tree_data.at[0, "y"], dbh=ref_tree_data.at[0, "dbh"])
 
+                list_dicts = list_dicts_main.copy()
                 # First remove all matched ids from dictionary - there seems to be a bug here, sometimes trees can be selected twice...
-                for minidict in list_dicts:
+                for minidict in list_dicts_main:
                     if minidict["tree"].id in matched_id.values():
                         list_dicts.remove(minidict)
                 
@@ -271,7 +277,7 @@ class MatchingApp:
                     second = list_dicts[1]
 
                     # If distance is above the confidence threshold, automate the matching, otherwise ask user for input
-                    if second["dist"] - closest["dist"] > confidence:
+                    if (second["dist"] - closest["dist"] > confidence) and (closest["dist"] < 4):    # HARDOCED VALUE = 4! If closest tree is more than 4 units away, still trigger the manual match.
                         matched_id[key] = closest["tree"].id
                         # Add a visual connection on match
                         visual_match = self.ax2.plot((ref_tree.x, closest["tree"].x), (ref_tree.y, closest["tree"].y), linewidth=1.5, c="black")
@@ -303,6 +309,7 @@ class MatchingApp:
                             matched_id[key] = selected_minidict["tree"].id
                             visual_match = self.ax2.plot((ref_tree.x, selected_minidict["tree"].x), (ref_tree.y, selected_minidict["tree"].y), linewidth=1.5, c="black")
                             visual_matches.append(visual_match)
+                            print(f"\tSelected las tree: {selected_minidict['tree'].id}!\n")
                         # Reset plot to previous state and add the connection
                         added_tree.remove()
                         for text in texts:
