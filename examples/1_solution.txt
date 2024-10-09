@@ -1,6 +1,0 @@
-X, Y shift: -4, 15
-Rotation angle: 77.0
-
-Transformation matrix:
-0.225	-0.974
-0.974	0.225
