@@ -13,6 +13,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import sys
 
 
+
 def close(event):
     sys.exit()
 
@@ -132,6 +133,7 @@ class MatchingApp:
             self.data2["x"] -= self.initial_transform[0]
             self.data2["y"] -= self.initial_transform[1]
             self.modified_data2 = self.data2.copy()  # Make a copy to track changes
+
             
 
             #print(self.data1)
@@ -338,8 +340,12 @@ class MatchingApp:
         # Button that saves the df:
         save_df_button = ttk.Button(self.tab_z, text="Shrani usklajene podatke", command=self.save_matched_data)
         save_df_button.pack(pady=5)
-        # Optionally I could also maybe add a button that does the rigid transform to find best fit of reference and lidar data? 
-        # And that this would then be included in the report as a sort of positioning error measurement - good idea
+        # Optionally I could also maybe add a button that does the rigid transform to find best fit of reference and lidar data?
+        # And that this would then be included in the report as a sort of positioning error measurement
+        rigid_transform_button = ttk.Button(self.tab_z, text="Najdi najboljšo transformacijo", command=self.perform_rigid_transform)
+        rigid_transform_button.pack(pady=5)
+
+
 
     def show_changes(self):
         if self.modified_data2 is not None:
@@ -381,6 +387,8 @@ class MatchingApp:
         df_ordered_data1 = self.data1.copy()
         #df_missed_ref_trees = df_ordered_data1.loc[df_ordered_data1[]] # Sort from values of the las_tree_order
         df_ordered_data2 = self.data2.copy()
+        df_ordered_data2["x"] += self.initial_transform[0]  # Important to remember that you still need to reapply the initial transformation!!
+        df_ordered_data2["y"] += self.initial_transform[1]
         # For data2 you should also first remove the ids that don't have a match! and add them to the commission error? What if the tree is outside of the plot bounds?        
         df_ordered_data1["sort_order"] = df_ordered_data1["id"].map(order_ref_dict)
         df_ordered_data2["sort_order"] = df_ordered_data2["id"].map(order_las_dict)
@@ -416,6 +424,90 @@ class MatchingApp:
         messagebox.showinfo("Uspeh", "Datoteka je ustvarjena!")
         print(df_final_matched)
         return df_final_matched # Come back once you figure out what you want to do with the commission and ommission data!
+    
+    def rigid_transform_3D(self, A, B):
+        """
+        Function lifted from:
+        https://github.com/nghiaho12/rigid_transform_3D/blob/master/rigid_transform_3D.py
+        """
+        assert A.shape == B.shape
+
+        num_rows, num_cols = A.shape
+        if num_rows != 3:
+            raise Exception(f"matrix A is not 3xN, it is {num_rows}x{num_cols}")
+
+        num_rows, num_cols = B.shape
+        if num_rows != 3:
+            raise Exception(f"matrix B is not 3xN, it is {num_rows}x{num_cols}")
+
+        # find mean column wise
+        centroid_A = np.mean(A, axis=1)
+        centroid_B = np.mean(B, axis=1)
+
+        # ensure centroids are 3x1
+        centroid_A = centroid_A.reshape(-1, 1)
+        centroid_B = centroid_B.reshape(-1, 1)
+
+        # subtract mean
+        Am = A - centroid_A
+        Bm = B - centroid_B
+
+        H = Am @ np.transpose(Bm)
+
+        # sanity check
+        #if linalg.matrix_rank(H) < 3:
+        #    raise ValueError("rank of H = {}, expecting 3".format(linalg.matrix_rank(H)))
+
+        # find rotation
+        U, S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+
+        # special reflection case
+        if np.linalg.det(R) < 0:
+            print("det(R) < R, reflection detected!, correcting for it ...")
+            Vt[2,:] *= -1
+            R = Vt.T @ U.T
+
+        t = -R @ centroid_A + centroid_B
+
+        return R, t
+
+    def perform_rigid_transform(self):
+        """Perform a rigid transformation, and return the X, Y, rotation, and RMSE"""
+        df_copy = self.df_final_matched.copy()
+
+        df_copy["zeros"] = 0
+
+        A = df_copy.loc[:, ["X_ref", "Y_ref", "zeros"]].transpose().to_numpy()
+        B = df_copy.loc[:, ["X_match", "Y_match", "zeros"]].transpose().to_numpy()
+        n = len(df_copy["zeros"])
+
+        # Recover R and t
+        ret_R, ret_t = self.rigid_transform_3D(A, B)
+
+        # Compare the recovered R and t with the original
+        B2 = (ret_R@A) + ret_t
+
+        # Find the root mean squared error
+        err = B2 - B
+        err = err * err
+        err = np.sum(err)
+        rmse = np.sqrt(err/n)
+        
+        matrix = np.append(ret_R, ret_t, 1)
+        matrix = np.append(matrix, [[0, 0, 0, 1]], 0)
+        #print(matrix)
+        matrix_format = ""
+        for line in matrix:
+            for element in line:
+                matrix_format += f"{np.round(element, 4)} "
+            matrix_format += "\n"
+        matrix_format = matrix_format.rstrip()
+
+        print(f"RMSE: {rmse}")
+        print(f"Matrix: {matrix_format}")
+        self.rmse = rmse
+        self.transformation_matrix = matrix_format
 
     def save_matched_data(self):
         """Saves the data in the set directory with the given name"""
