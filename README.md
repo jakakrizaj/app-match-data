@@ -1,1 +1,3 @@
 Full disclosure - this application is a work in progress. It performs well for matching reference and las data, but it has some bugs and unfinished features. Future improvements are outlined in issues.
+
+The base thesis that motivated this app is that matching trees from reference and lidar data can be tricky to do automatically - since reference trees can be missing, and lidar measurements can have falsely detected trees. Automatic matching may lead to a reference tree being matched to a lidar-detected tree that isn't actually there. Thus, I decided to create an app that supports semi-automatic matching and visual inspection, with additional options of rotating / translating the lidar data before the matching.
